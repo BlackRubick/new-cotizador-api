@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DB_URL")
+}
+
+model User {
+  id                Int      @id @default(autoincrement())
+  name              String
+  email             String   @unique
+  password          String
+  role              String
+  canModifyPrices   Boolean  @default(false)
+  assignedCompanyId Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  sellerQuotes      Quote[]  @relation("SellerQuotes")
+}
+
+model Company {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clients   Client[]
+  quotes    Quote[]  @relation("CompanyQuotes")
+}
+
+model Client {
+  id                  Int         @id @default(autoincrement())
+  name                String
+  email               String?
+  phone               String?
+  address             String?
+  city                String?
+  state               String?
+  zipCode             String?
+  empresaResponsable  String?
+  dependencia         String?
+  hospital            String?
+  contrato            String?
+  companyId           Int?
+  company             Company?    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  equipos             Equipment[]
+  quotes              Quote[]     @relation("ClientQuotes")
+  metadata            Json?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+}
+
+model Equipment {
+  id                   Int      @id @default(autoincrement())
+  clientId             Int
+  equipo               String
+  marca                String?
+  modelo               String?
+  numeroSerie          String?
+  fechaInstalacion     String?
+  ultimoMantenimiento  String?
+  notas                String?
+  client               Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model Product {
+  id          Int         @id @default(autoincrement())
+  sku         String      @unique
+  name        String
+  description String?
+  basePrice   Float
+  unit        String
+  imageUrl    String?
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  quoteItems  QuoteItem[]
+}
+
+model Quote {
+  id              Int         @id @default(autoincrement())
+  folio           String      @unique
+  sellerCompanyId Int?
+  sellerCompany   Company?    @relation("CompanyQuotes", fields: [sellerCompanyId], references: [id], onDelete: SetNull)
+  clientId        Int?
+  client          Client?     @relation("ClientQuotes", fields: [clientId], references: [id], onDelete: SetNull)
+  sellerId        Int?
+  seller          User?       @relation("SellerQuotes", fields: [sellerId], references: [id], onDelete: SetNull)
+  subtotal        Float
+  taxes           Float
+  total           Float
+  status          String      @default("draft")
+  clientContact   String?
+  email           String?
+  phone           String?
+  clientAddress   String?
+  items           QuoteItem[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model QuoteItem {
+  id          Int      @id @default(autoincrement())
+  quoteId     Int
+  productId   Int?
+  description String
+  qty         Int
+  unitPrice   Float
+  discount    Float    @default(0)
+  total       Float
+  quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+}
+
+model EmailLog {
+  id          Int      @id @default(autoincrement())
+  to          String
+  subject     String
+  body        String?
+  attachments String?
+  createdAt   DateTime @default(now())
+}

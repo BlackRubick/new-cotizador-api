@@ -1,0 +1,38 @@
+import { Router, Request, Response, NextFunction } from 'express';
+import prisma from '../prisma/client';
+import { requireAuth, requireRole } from '../middlewares/auth';
+
+const router = Router();
+
+router.get('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const products = await prisma.product.findMany();
+    res.json({ success: true, data: products });
+  } catch (err) { next(err); }
+});
+
+router.post('/', requireAuth, requireRole('admin','jefe'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const p = req.body;
+    const product = await prisma.product.create({ data: p });
+    res.json({ success: true, data: product });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id', requireAuth, requireRole('admin','jefe'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    const product = await prisma.product.update({ where: { id }, data: req.body });
+    res.json({ success: true, data: product });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id', requireAuth, requireRole('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    await prisma.product.delete({ where: { id } });
+    res.json({ success: true, data: { id } });
+  } catch (err) { next(err); }
+});
+
+export default router;

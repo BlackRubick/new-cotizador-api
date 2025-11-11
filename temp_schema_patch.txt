@@ -1,0 +1,13 @@
+model Product {
+  id          Int         @id @default(autoincrement())
+  sku         String      @unique
+  name        String
+  description String?
+  basePrice   Float
+  unit        String
+  imageUrl    String?
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  quoteItems  QuoteItem[]
+}

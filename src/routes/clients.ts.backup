@@ -1,0 +1,133 @@
+import { Router, Request, Response, NextFunction } from 'express';
+import prisma from '../prisma/client';
+import { requireAuth } from '../middlewares/auth';
+
+const router = Router();
+
+router.get('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clients = await prisma.client.findMany({ include: { equipos: true } });
+    res.json({ success: true, data: clients });
+  } catch (err) { next(err); }
+});
+
+router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body || {};
+    // debug log to inspect incoming payload when users report errors
+    // eslint-disable-next-line no-console
+    console.debug('POST /api/clients body:', body);
+
+    // try multiple possible fields from frontend (Spanish keys)
+    const name = body.name || body.empresaResponsable || body.hospital || body.dependencia;
+    const email = body.email || body.correo;
+    const phone = body.phone || body.telefono || body.numeroTelefono;
+    // address can be provided as direccion + ciudad + estado + codigoPostal
+    const address = body.address || body.direccion || [body.direccion, body.ciudad, body.estado, body.codigoPostal].filter(Boolean).join(', ');
+    let companyId = body.companyId || body.company || body.company_id || body.companyId;
+
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ success: false, error: 'name is required' });
+    }
+
+    // if no companyId provided, try to infer from authenticated user
+    if (!companyId && (req as any).user && (req as any).user.userId) {
+      try {
+        const u = await prisma.user.findUnique({ where: { id: Number((req as any).user.userId) } });
+        if (u && u.assignedCompanyId) companyId = u.assignedCompanyId;
+      } catch (e) { /* ignore */ }
+    }
+
+    // build equipos array: if frontend sends single equipo fields, convert to array
+    let equipos = body.equipos;
+    if (!Array.isArray(equipos) && body.equipo) {
+      // build equipment object only with fields present in Prisma schema
+      const notasParts: string[] = [];
+      if (body.notas) notasParts.push(String(body.notas));
+      if (body.fechaInstalacion) notasParts.push(`fechaInstalacion: ${String(body.fechaInstalacion)}`);
+      if (body.ultimoMantenimiento) notasParts.push(`ultimoMantenimiento: ${String(body.ultimoMantenimiento)}`);
+
+      const eq: any = {
+        equipo: body.equipo,
+      };
+  if (body.marca) eq.marca = String(body.marca);
+  if (body.modelo) eq.modelo = String(body.modelo);
+  if (body.numeroSerie) eq.numeroSerie = String(body.numeroSerie);
+      if (notasParts.length) eq.notas = notasParts.join(' | ');
+
+      equipos = [eq];
+    }
+
+    // build data object skipping undefined fields to avoid Prisma confusion
+    const data: any = { name };
+    if (email) data.email = email;
+    if (phone) data.phone = phone;
+    if (address) data.address = address;
+    if (companyId) data.companyId = Number(companyId);
+    data.equipos = { create: Array.isArray(equipos) ? equipos : [] };
+
+    const client = await prisma.client.create({ data, include: { equipos: true } });
+    res.json({ success: true, data: client });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    const client = await prisma.client.findUnique({ where: { id }, include: { equipos: true } });
+    if (!client) return res.status(404).json({ success: false, error: 'Not found' });
+    res.json({ success: true, data: client });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    const { name, email, phone, address, companyId, equipos } = req.body;
+    const client = await prisma.client.update({ where: { id }, data: { name, email, phone, address, companyId } });
+    // handle equipos: simple strategy - delete existing and recreate
+    if (Array.isArray(equipos)) {
+      await prisma.equipment.deleteMany({ where: { clientId: id } });
+      await prisma.equipment.createMany({ data: equipos.map((e: any) => ({ clientId: id, equipo: e.equipo, marca: e.marca, modelo: e.modelo, numeroSerie: e.numeroSerie, notas: e.notas })) });
+    }
+    const updated = await prisma.client.findUnique({ where: { id }, include: { equipos: true } });
+    res.json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    await prisma.client.delete({ where: { id } });
+    res.json({ success: true, data: { id } });
+  } catch (err) { next(err); }
+});
+
+// Equipments routes (optional separate)
+router.post('/:clientId/equipments', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clientId = Number(req.params.clientId);
+    const { equipo, marca, modelo, numeroSerie, notas } = req.body;
+    const eq = await prisma.equipment.create({ data: { clientId, equipo, marca, modelo, numeroSerie, notas } });
+    res.json({ success: true, data: eq });
+  } catch (err) { next(err); }
+});
+
+router.put('/:clientId/equipments/:equipId', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const equipId = Number(req.params.equipId);
+    const data = req.body;
+    const eq = await prisma.equipment.update({ where: { id: equipId }, data });
+    res.json({ success: true, data: eq });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:clientId/equipments/:equipId', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const equipId = Number(req.params.equipId);
+    await prisma.equipment.delete({ where: { id: equipId } });
+    res.json({ success: true, data: { id: equipId } });
+  } catch (err) { next(err); }
+});
+
+export default router;

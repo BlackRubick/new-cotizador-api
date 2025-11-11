@@ -1,0 +1,362 @@
+import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import prisma from '../prisma/client';
+import { requireAuth, requireRole } from '../middlewares/auth';
+
+const router = Router();
+
+// Schema de validación para clientes
+const clientSchema = z.object({
+  name: z.string().min(1, 'Nombre es requerido'),
+  email: z.string().email('Email inválido').optional().nullable(),
+  phone: z.string().optional().nullable(),
+  address: z.string().optional().nullable(),
+  city: z.string().optional().nullable(),
+  state: z.string().optional().nullable(),
+  zipCode: z.string().optional().nullable(),
+  empresaResponsable: z.string().optional().nullable(),
+  dependencia: z.string().optional().nullable(),
+  hospital: z.string().optional().nullable(),
+  contrato: z.string().optional().nullable(),
+  companyId: z.number().optional().nullable(),
+  metadata: z.any().optional().nullable()
+});
+
+// Schema para equipos
+const equipmentSchema = z.object({
+  equipo: z.string().min(1, 'Nombre del equipo es requerido'),
+  marca: z.string().optional().nullable(),
+  modelo: z.string().optional().nullable(),
+  numeroSerie: z.string().optional().nullable(),
+  fechaInstalacion: z.string().optional().nullable(),
+  ultimoMantenimiento: z.string().optional().nullable(),
+  notas: z.string().optional().nullable()
+});
+
+// GET todos los clientes con sus equipos
+router.get('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clients = await prisma.client.findMany({ 
+      include: { equipos: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json({ success: true, data: clients });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// GET un cliente por ID
+router.get('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, error: 'ID inválido' });
+    }
+    
+    const client = await prisma.client.findUnique({ 
+      where: { id }, 
+      include: { equipos: true } 
+    });
+    
+    if (!client) {
+      return res.status(404).json({ success: false, error: 'Cliente no encontrado' });
+    }
+    
+    res.json({ success: true, data: client });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// POST crear un cliente
+router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body || {};
+    
+    // Mapear campos del Excel
+    const clientData: any = {
+      name: body.name || body.hospital || body.empresaResponsable || 'Sin nombre',
+      email: body.email || null,
+      phone: body.phone || null,
+      address: body.address || body.direccion || null,
+      city: body.city || body.ciudad || null,
+      state: body.state || body.estado || null,
+      zipCode: body.zipCode || body.codigoPostal ? String(body.zipCode || body.codigoPostal) : null,
+      empresaResponsable: body.empresaResponsable || null,
+      dependencia: body.dependencia || null,
+      hospital: body.hospital || null,
+      contrato: body.contrato || null,
+      companyId: body.companyId || null
+    };
+    
+    // Validar
+    const validated = clientSchema.parse(clientData);
+    
+    // Manejar equipos
+    const equiposData = [];
+    if (body.equipo) {
+      equiposData.push({
+        equipo: body.equipo,
+        marca: body.marca || null,
+        modelo: body.modelo || null,
+        numeroSerie: body.numeroSerie || null,
+        fechaInstalacion: body.fechaInstalacion || null,
+        ultimoMantenimiento: body.ultimoMantenimiento || null,
+        notas: null
+      });
+    }
+    
+    if (Array.isArray(body.equipos)) {
+      body.equipos.forEach((eq: any) => {
+        equiposData.push({
+          equipo: eq.equipo || eq.nombre,
+          marca: eq.marca || null,
+          modelo: eq.modelo || null,
+          numeroSerie: eq.numeroSerie || null,
+          fechaInstalacion: eq.fechaInstalacion || null,
+          ultimoMantenimiento: eq.ultimoMantenimiento || null,
+          notas: eq.notas || null
+        });
+      });
+    }
+    
+    // Crear cliente con equipos
+    const client = await prisma.client.create({
+      data: {
+        ...validated,
+        equipos: {
+          create: equiposData
+        }
+      },
+      include: { equipos: true }
+    });
+    
+    res.status(201).json({ success: true, data: client });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// POST batch - Importar múltiples clientes (desde Excel)
+router.post('/batch', requireAuth, requireRole('admin', 'jefe'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { clients } = req.body;
+    
+    if (!Array.isArray(clients)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Se espera un array de clientes' 
+      });
+    }
+    
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: [] as any[]
+    };
+    
+    for (const clientData of clients) {
+      try {
+        // Mapear datos
+        const data: any = {
+          name: clientData.hospital || clientData.empresaResponsable || 'Sin nombre',
+          email: clientData.email || null,
+          phone: clientData.phone || null,
+          address: clientData.direccion || null,
+          city: clientData.ciudad || null,
+          state: clientData.estado || null,
+          zipCode: clientData.codigoPostal ? String(clientData.codigoPostal) : null,
+          empresaResponsable: clientData.empresaResponsable || null,
+          dependencia: clientData.dependencia || null,
+          hospital: clientData.hospital || null,
+          contrato: clientData.contrato || null,
+          metadata: {
+            estatusAbril2025: clientData.estatusAbril2025 || null,
+            estatusInicio26: clientData.estatusInicio26 || null
+          }
+        };
+        
+        // Crear equipo si existe
+        const equiposData = [];
+        if (clientData.equipo) {
+          equiposData.push({
+            equipo: clientData.equipo,
+            marca: clientData.marca || null,
+            modelo: clientData.modelo || null,
+            numeroSerie: clientData.numeroSerie || null,
+            fechaInstalacion: clientData.fechaInstalacion || null,
+            ultimoMantenimiento: clientData.ultimoMantenimiento || null
+          });
+        }
+        
+        // Crear cliente
+        await prisma.client.create({
+          data: {
+            ...data,
+            equipos: {
+              create: equiposData
+            }
+          }
+        });
+        
+        results.success++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push({
+          client: clientData.hospital || clientData.empresaResponsable || 'desconocido',
+          error: err.message
+        });
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      data: results 
+    });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// PUT actualizar un cliente
+router.put('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, error: 'ID inválido' });
+    }
+    
+    const body = req.body || {};
+    
+    // Preparar datos para actualizar
+    const updateData: any = {};
+    if (body.name) updateData.name = body.name;
+    if (body.email !== undefined) updateData.email = body.email;
+    if (body.phone !== undefined) updateData.phone = body.phone;
+    if (body.address !== undefined) updateData.address = body.address;
+    if (body.direccion !== undefined) updateData.address = body.direccion;
+    if (body.city !== undefined) updateData.city = body.city;
+    if (body.ciudad !== undefined) updateData.city = body.ciudad;
+    if (body.state !== undefined) updateData.state = body.state;
+    if (body.estado !== undefined) updateData.state = body.estado;
+    if (body.zipCode !== undefined) updateData.zipCode = String(body.zipCode);
+    if (body.codigoPostal !== undefined) updateData.zipCode = String(body.codigoPostal);
+    if (body.empresaResponsable !== undefined) updateData.empresaResponsable = body.empresaResponsable;
+    if (body.dependencia !== undefined) updateData.dependencia = body.dependencia;
+    if (body.hospital !== undefined) updateData.hospital = body.hospital;
+    if (body.contrato !== undefined) updateData.contrato = body.contrato;
+    if (body.companyId !== undefined) updateData.companyId = body.companyId;
+    if (body.metadata !== undefined) updateData.metadata = body.metadata;
+    
+    // Actualizar cliente
+    const client = await prisma.client.update({ 
+      where: { id }, 
+      data: updateData 
+    });
+    
+    // Si se proporcionan equipos, reemplazarlos
+    if (Array.isArray(body.equipos)) {
+      await prisma.equipment.deleteMany({ where: { clientId: id } });
+      await prisma.equipment.createMany({
+        data: body.equipos.map((eq: any) => ({
+          clientId: id,
+          equipo: eq.equipo || eq.nombre,
+          marca: eq.marca || null,
+          modelo: eq.modelo || null,
+          numeroSerie: eq.numeroSerie || null,
+          fechaInstalacion: eq.fechaInstalacion || null,
+          ultimoMantenimiento: eq.ultimoMantenimiento || null,
+          notas: eq.notas || null
+        }))
+      });
+    }
+    
+    const updated = await prisma.client.findUnique({ 
+      where: { id }, 
+      include: { equipos: true } 
+    });
+    
+    res.json({ success: true, data: updated });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// DELETE eliminar un cliente
+router.delete('/:id', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, error: 'ID inválido' });
+    }
+    
+    await prisma.client.delete({ where: { id } });
+    res.json({ success: true, data: { id } });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// === RUTAS DE EQUIPOS ===
+
+// POST agregar equipo a un cliente
+router.post('/:clientId/equipments', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const clientId = Number(req.params.clientId);
+    if (isNaN(clientId)) {
+      return res.status(400).json({ success: false, error: 'ID de cliente inválido' });
+    }
+    
+    const validated = equipmentSchema.parse(req.body);
+    
+    const equipment = await prisma.equipment.create({
+      data: {
+        clientId,
+        ...validated
+      }
+    });
+    
+    res.status(201).json({ success: true, data: equipment });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// PUT actualizar un equipo
+router.put('/:clientId/equipments/:equipId', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const equipId = Number(req.params.equipId);
+    if (isNaN(equipId)) {
+      return res.status(400).json({ success: false, error: 'ID de equipo inválido' });
+    }
+    
+    const validated = equipmentSchema.partial().parse(req.body);
+    
+    const equipment = await prisma.equipment.update({
+      where: { id: equipId },
+      data: validated
+    });
+    
+    res.json({ success: true, data: equipment });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+// DELETE eliminar un equipo
+router.delete('/:clientId/equipments/:equipId', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const equipId = Number(req.params.equipId);
+    if (isNaN(equipId)) {
+      return res.status(400).json({ success: false, error: 'ID de equipo inválido' });
+    }
+    
+    await prisma.equipment.delete({ where: { id: equipId } });
+    res.json({ success: true, data: { id: equipId } });
+  } catch (err) { 
+    next(err); 
+  }
+});
+
+export default router;
