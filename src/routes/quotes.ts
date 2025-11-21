@@ -150,6 +150,23 @@ function genFolio() {
 router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const payload = req.body;
+    // Validate foreign keys before attempting create to provide clearer errors
+    const sellerCompanyId = payload.sellerCompanyId;
+    const clientId = payload.clientId;
+    const sellerId = payload.sellerId;
+
+    if (sellerCompanyId) {
+      const sc = await prisma.company.findUnique({ where: { id: Number(sellerCompanyId) } });
+      if (!sc) return res.status(400).json({ success: false, error: 'sellerCompanyId not found' });
+    }
+    if (clientId) {
+      const c = await prisma.client.findUnique({ where: { id: Number(clientId) } });
+      if (!c) return res.status(400).json({ success: false, error: 'clientId not found' });
+    }
+    if (sellerId) {
+      const s = await prisma.user.findUnique({ where: { id: Number(sellerId) } });
+      if (!s) return res.status(400).json({ success: false, error: 'sellerId not found' });
+    }
     // create quote and items
     const folio = genFolio();
     const items = payload.products || [];
@@ -173,7 +190,14 @@ router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunc
     const total = subtotal + taxes;
     const updated = await prisma.quote.update({ where: { id: created.id }, data: { subtotal, taxes, total } , include: { items: true } });
     res.json({ success: true, data: updated });
-  } catch (err) { next(err); }
+  } catch (err: any) {
+    // Handle Prisma foreign key error with clearer response
+    if (err && err.code === 'P2003') {
+      const field = err.meta?.field_name || 'unknown';
+      return res.status(400).json({ success: false, error: `Foreign key constraint violated: ${field}` });
+    }
+    next(err);
+  }
 });
 
 router.get('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
